@@ -1,0 +1,79 @@
+name: Build sing-box reF1nd
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 19 * * *" # 北京时间凌晨 3:00
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_update: ${{ steps.check.outputs.needs_update }}
+      latest_tag: ${{ steps.check.outputs.latest_tag }}
+      latest_time: ${{ steps.check.outputs.latest_time }}
+      go_version: ${{ steps.check.outputs.go_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/check_update.sh
+
+  build:
+    needs: check
+    if: needs.check.outputs.needs_update == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: 只保留现代架构
+          - { os: linux, arch: amd64, v: v3 }
+          - { os: linux, arch: amd64, v: v4 }
+          - { os: linux, arch: arm64, v: "" }
+          # Android: 核心需求
+          - { os: android, arch: arm64, v: "" }
+          # Windows: 现代架构
+          - { os: windows, arch: amd64, v: v3 }
+          - { os: windows, arch: arm64, v: "" }
+          # Darwin (macOS): 仅保留 arm64 和 amd64
+          - { os: darwin, arch: amd64, v: "" }
+          - { os: darwin, arch: arm64, v: "" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: reF1nd/sing-box
+          ref: reF1nd-main
+          fetch-depth: 1
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.check.outputs.go_version }}
+      - name: Build Core
+        run: bash ../scripts/build.sh ${{ matrix.os }} ${{ matrix.arch }} "${{ matrix.v }}" ${{ needs.check.outputs.latest_tag }}
+        working-directory: .
+      - name: Package
+        run: bash ../scripts/package.sh ${{ matrix.os }} ${{ matrix.arch }} "${{ matrix.v }}" ${{ needs.check.outputs.latest_tag }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.v }}
+          path: output/*
+
+  release:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.latest_tag }}
+          name: sing-box reF1nd ${{ needs.check.outputs.latest_tag }}
+          body: |
+            Build Time: ${{ needs.check.outputs.latest_time }}
+            Upstream: https://github.com/reF1nd/sing-box/tree/reF1nd-main
+            Go Version: ${{ needs.check.outputs.go_version }}
+          files: artifacts/*
