@@ -7,7 +7,7 @@ GOAMD64_LEVEL=$3
 VERSION_TAG=$4
 
 # 设置 Tags (包含 ref1nd 特色 tags)
-BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ech"
+BUILD_TAGS="with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale"
 
 # 1. 强制使用本地最新的工具链，不再进行回退切换
 export GOTOOLCHAIN=local
