@@ -40,20 +40,38 @@ jobs:
           - { os: darwin, arch: amd64, v: "" }
           - { os: darwin, arch: arm64, v: "" }
     steps:
-      - uses: actions/checkout@v4
+      # 1. 先拉取你自己的仓库（包含 scripts/）
+      - name: Checkout Scripts
+        uses: actions/checkout@v4
+        with:
+          path: '.'
+
+      # 2. 将上游源码拉取到 src/ 目录下，防止覆盖 scripts/
+      - name: Checkout Upstream
+        uses: actions/checkout@v4
         with:
           repository: reF1nd/sing-box
           ref: reF1nd-main
           fetch-depth: 1
+          path: src
+
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ needs.check.outputs.go_version }}
+
+      # 3. 进入 src 目录进行编译，此时脚本就在 ../scripts/ 里
       - name: Build Core
         run: bash ../scripts/build.sh ${{ matrix.os }} ${{ matrix.arch }} "${{ matrix.v }}" ${{ needs.check.outputs.latest_tag }}
-        working-directory: .
+        working-directory: src
+
+      # 4. 打包，注意 working-directory 保持在 src 
       - name: Package
         run: bash ../scripts/package.sh ${{ matrix.os }} ${{ matrix.arch }} "${{ matrix.v }}" ${{ needs.check.outputs.latest_tag }}
-      - uses: actions/upload-artifact@v4
+        working-directory: src
+
+      # 5. 上传产物（注意路径偏移）
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
           name: sing-box-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.v }}
           path: output/*
