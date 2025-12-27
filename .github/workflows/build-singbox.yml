@@ -115,12 +115,22 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # 增加这一步：获取北京时间
+      - name: Get Build Time
+        id: time
+        run: |
+          # 转换为北京时间 (UTC+8)
+          echo "now=$(date -d '+8 hours' +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+
       - name: Set Env
         run: |
           if [ "${{ matrix.branch }}" == "reF1nd-main" ]; then
             echo "REL_TAG=${{ needs.check.outputs.main_tag }}" >> $GITHUB_ENV
+            echo "UPSTREAM_TIME=${{ needs.check.outputs.latest_time }}" >> $GITHUB_ENV
           else
             echo "REL_TAG=${{ needs.check.outputs.dev_tag }}-dev" >> $GITHUB_ENV
+            # Dev 分支可能没有特定的时间，也可以用 check 任务传过来的
+            echo "UPSTREAM_TIME=${{ needs.check.outputs.latest_time }}" >> $GITHUB_ENV
           fi
 
       - name: Create Release
@@ -128,7 +138,15 @@ jobs:
         with:
           tag_name: ${{ env.REL_TAG }}
           name: sing-box reF1nd [${{ matrix.branch }}]
-          body: "Source Branch: ${{ matrix.branch }}"
+          # 在 Body 注入构建时间
+          body: |
+            ### 🛠️ 构建信息 (Build Info)
+            - **分支 (Branch)**: `${{ matrix.branch }}`
+            - **上游更新日期 (Upstream Time)**: `${{ env.UPSTREAM_TIME }}`
+            - **构建完成时间 (Build Time)**: `${{ steps.time.outputs.now }} (UTC+8)`
+
+            ### 🔗 源代码
+            - [reF1nd/sing-box](https://github.com/reF1nd/sing-box/tree/${{ matrix.branch }})
           files: dist/*
 
   package_arch:
