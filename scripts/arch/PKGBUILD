@@ -2,7 +2,8 @@
 # Template for sing-box-ref1nd (CI Generated)
 
 pkgname=_PKGNAME_  # CI 会替换这个 (sing-box-ref1nd 或 sing-box-ref1nd-dev)
-pkgver=_PKGVER_    # CI 会替换这个
+_rawver=_RAWVER_ # CI 注入原始版本号 (如 1.13.0-alpha.34)
+pkgver=_PKGVER_  # CI 注入 Arch 兼容版本号 (如 1.13.0_alpha.34)
 pkgrel=1
 pkgdesc="Universal proxy platform (reF1nd version, optimized for $_ARCH_OPTS_)"
 arch=('x86_64' 'aarch64')
@@ -16,16 +17,14 @@ makedepends=('git')
 
 # 为了获取 systemd/rules/completions 等文件，我们需要拉取源码
 # 注意：这里我们拉取对应的 tag 源码，仅用于提取辅助文件
-source=("${pkgname}-${pkgver}.tar.gz::https://github.com/SagerNet/sing-box/archive/v${pkgver}.tar.gz")
-sha256sums=('SKIP') # CI 环境跳过校验，或者是动态计算，这里为了简单直接 SKIP
+# 核心：定义两个 source。一个是上游源码，一个是 CI 传进来的二进制
+source=("sing-box-${_rawver}.tar.gz::https://github.com/SagerNet/sing-box/archive/v${_rawver}.tar.gz"
+        "sing-box-bin") # 这里直接引用本地文件
+sha256sums=('SKIP' 'SKIP') # CI 环境跳过校验，或者是动态计算，这里为了简单直接 SKIP
 
 package() {
-    # 1. 准备辅助文件 (来自官方源码结构)
-    # 这里的目录名取决于解压后的文件夹，通常是 sing-box-版本号
-    # 如果是 dev 版本可能没有对应 tag 的 tarball，这里我们需要做个容错
-    # 在 CI 脚本里我们会处理源码解压后的目录名为 "src_aux"
-    
-    cd "${srcdir}/src_aux"
+    # 重点：sing-box 源码解压后的文件夹名固定为 sing-box-版本号
+    cd "${srcdir}/sing-box-${_rawver}"
 
     # 安装 License
     install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
