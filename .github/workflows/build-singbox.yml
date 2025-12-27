@@ -55,9 +55,11 @@ jobs:
           fetch-depth: 1
           path: src
 
-      - uses: actions/setup-go@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ needs.check.outputs.go_version }}
+          go-version: "stable" # 自动获取最新的稳定版 (目前是 1.23.4，即将 1.24)
+          check-latest: true # 强制检查最新，确保不使用 Runner 缓存的旧版
 
       # 3. 进入 src 目录进行编译，此时脚本就在 ../scripts/ 里
       - name: Build Core
