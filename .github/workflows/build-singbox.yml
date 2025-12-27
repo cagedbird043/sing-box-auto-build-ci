@@ -1,111 +1,139 @@
 name: Build sing-box reF1nd
+
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 19 * * *" # 北京时间凌晨 3:00
-
-permissions:
-  contents: write # 必须赋予写权限，否则无法创建 Release 和上传文件
+    - cron: "0 19 * * *"
 
 jobs:
+  # 第一步：获取各分支对应的最新 Tag
   check:
     runs-on: ubuntu-latest
     outputs:
-      needs_update: ${{ steps.check.outputs.needs_update }}
-      latest_tag: ${{ steps.check.outputs.latest_tag }}
-      latest_time: ${{ steps.check.outputs.latest_time }}
-      go_version: ${{ steps.check.outputs.go_version }}
+      main_tag: ${{ steps.tags.outputs.main_tag }}
+      dev_tag: ${{ steps.tags.outputs.dev_tag }}
     steps:
-      - uses: actions/checkout@v4
-      - id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/check_update.sh
+      - id: tags
+        run: |
+          # 提取稳定版 Tag (用于 main)
+          MAIN=$(git ls-remote --tags https://github.com/SagerNet/sing-box.git | grep -Po 'refs/tags/\Kv[0-9.]+$' | sort -V | tail -n1)
+          # 提取所有最新 Tag (用于 dev)
+          DEV=$(git ls-remote --tags https://github.com/SagerNet/sing-box.git | grep -Po 'refs/tags/\Kv[0-9].*$' | sort -V | tail -n1)
+          echo "main_tag=$MAIN" >> $GITHUB_OUTPUT
+          echo "dev_tag=$DEV" >> $GITHUB_OUTPUT
 
+  # 第二步：根据 YAML 矩阵进行编译
   build:
     needs: check
-    if: needs.check.outputs.needs_update == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        branch: [reF1nd-main, reF1nd-dev]
+        # 定义笛卡尔积组合
         include:
-          # Linux: 只保留现代架构
-          - { os: linux, arch: amd64, v: v3 }
-          - { os: linux, arch: amd64, v: v4 }
-          - { os: linux, arch: arm64, v: "" }
-          # Android: 核心需求
-          - { os: android, arch: arm64, v: "" }
-          # Windows: 现代架构
-          - { os: windows, arch: amd64, v: v3 }
-          - { os: windows, arch: arm64, v: "" }
-          # Darwin (macOS): 仅保留 arm64 和 amd64
-          - { os: darwin, arch: amd64, v: "" }
-          - { os: darwin, arch: arm64, v: "" }
+          # Android: 仅 arm64
+          - { os: android, arch: arm64, v: "", branch: reF1nd-main }
+          - { os: android, arch: arm64, v: "", branch: reF1nd-dev }
+
+          # Linux: amd64 (兼容, v3, v4) + arm64
+          - { os: linux, arch: amd64, v: "", branch: reF1nd-main }
+          - { os: linux, arch: amd64, v: v3, branch: reF1nd-main }
+          - { os: linux, arch: amd64, v: v4, branch: reF1nd-main }
+          - { os: linux, arch: arm64, v: "", branch: reF1nd-main }
+          - { os: linux, arch: amd64, v: "", branch: reF1nd-dev }
+          - { os: linux, arch: amd64, v: v3, branch: reF1nd-dev }
+          - { os: linux, arch: amd64, v: v4, branch: reF1nd-dev }
+          - { os: linux, arch: arm64, v: "", branch: reF1nd-dev }
+
+          # Windows: 同 Linux
+          - { os: windows, arch: amd64, v: "", branch: reF1nd-main }
+          - { os: windows, arch: amd64, v: v3, branch: reF1nd-main }
+          - { os: windows, arch: amd64, v: v4, branch: reF1nd-main }
+          - { os: windows, arch: arm64, v: "", branch: reF1nd-main }
+          - { os: windows, arch: amd64, v: "", branch: reF1nd-dev }
+          - { os: windows, arch: amd64, v: v3, branch: reF1nd-dev }
+          - { os: windows, arch: amd64, v: v4, branch: reF1nd-dev }
+          - { os: windows, arch: arm64, v: "", branch: reF1nd-dev }
+
+          # MacOS (Darwin): 仅 amd64 + arm64, 无 v3/v4 区分
+          - { os: darwin, arch: amd64, v: "", branch: reF1nd-main }
+          - { os: darwin, arch: arm64, v: "", branch: reF1nd-main }
+          - { os: darwin, arch: amd64, v: "", branch: reF1nd-dev }
+          - { os: darwin, arch: arm64, v: "", branch: reF1nd-dev }
+
     steps:
-      # 1. 先拉取你自己的仓库（包含 scripts/）
       - name: Checkout Scripts
         uses: actions/checkout@v4
         with:
           path: "."
 
-      # 2. 将上游源码拉取到 src/ 目录下，防止覆盖 scripts/
       - name: Checkout Upstream
         uses: actions/checkout@v4
         with:
           repository: reF1nd/sing-box
-          ref: reF1nd-main
-          fetch-depth: 1
+          ref: ${{ matrix.branch }}
           path: src
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
-          go-version: "stable" # 自动获取最新的稳定版 (目前是 1.23.4，即将 1.24)
-          check-latest: true # 强制检查最新，确保不使用 Runner 缓存的旧版
+          go-version: "stable"
+          check-latest: true
 
-      # 3. 进入 src 目录进行编译，此时脚本就在 ../scripts/ 里
-      - name: Build Core
-        # 改用环境变量传递，脚本内部改为读取环境变量
-        env:
-          TARGET_OS: ${{ matrix.os }}
-          TARGET_ARCH: ${{ matrix.arch }}
-          TARGET_V: ${{ matrix.v }}
-          VERSION_TAG: ${{ needs.check.outputs.latest_tag }}
+      - name: Set Version Tag
         run: |
-          # 调试打印：如果这里是空的，说明 check 任务的 outputs 映射写错了
-          echo "Debug: VERSION_TAG is [${VERSION_TAG}]" 
-          bash ../scripts/build.sh "$TARGET_OS" "$TARGET_ARCH" "$TARGET_V" "$VERSION_TAG"
+          if [ "${{ matrix.branch }}" == "reF1nd-main" ]; then
+            echo "TAG=${{ needs.check.outputs.main_tag }}" >> $GITHUB_ENV
+          else
+            echo "TAG=${{ needs.check.outputs.dev_tag }}" >> $GITHUB_ENV
+          fi
+
+      - name: Build Core
+        run: bash ../scripts/build.sh ${{ matrix.os }} ${{ matrix.arch }} "${{ matrix.v }}" "$TAG"
         working-directory: src
 
-      # 4. 打包，注意 working-directory 保持在 src
       - name: Package
-        run: bash ../scripts/package.sh ${{ matrix.os }} ${{ matrix.arch }} "${{ matrix.v }}" ${{ needs.check.outputs.latest_tag }}
+        run: bash ../scripts/package.sh ${{ matrix.os }} ${{ matrix.arch }} "${{ matrix.v }}" "$TAG" "${{ matrix.branch }}"
         working-directory: src
 
-      # 5. 上传产物（注意路径偏移）
-      - name: Upload Artifact
+      - name: Upload to Branch Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sing-box-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.v }}
+          name: assets-${{ matrix.branch }}-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.v }}
           path: output/*
 
-  release:
+  # 第三步：分发到不同的 Release
+  publish:
     needs: [check, build]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        branch: [reF1nd-main, reF1nd-dev]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - name: Download Branch Assets
+        uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          pattern: assets-${{ matrix.branch }}-*
+          path: dist
           merge-multiple: true
-      - name: Create Release
+
+      - name: Set Release Tag
+        run: |
+          if [ "${{ matrix.branch }}" == "reF1nd-main" ]; then
+            echo "REL_TAG=${{ needs.check.outputs.main_tag }}" >> $GITHUB_ENV
+          else
+            echo "REL_TAG=${{ needs.check.outputs.dev_tag }}-dev" >> $GITHUB_ENV
+          fi
+
+      - name: Create Branch Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.check.outputs.latest_tag }}
-          name: sing-box reF1nd ${{ needs.check.outputs.latest_tag }}
+          tag_name: ${{ env.REL_TAG }}
+          name: sing-box reF1nd [${{ matrix.branch }}]
           body: |
-            Build Time: ${{ needs.check.outputs.latest_time }}
-            Upstream: https://github.com/reF1nd/sing-box/tree/reF1nd-main
-            Go Version: ${{ needs.check.outputs.go_version }}
-          files: artifacts/*
+            Automated build for ${{ matrix.branch }}
+            Source: https://github.com/reF1nd/sing-box/tree/${{ matrix.branch }}
+          files: dist/*
