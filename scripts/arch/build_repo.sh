@@ -20,15 +20,11 @@ else
     CLEAN_VER="${RAW_VER//-/_}"
 fi
 
-# 2. 准备工作区并克隆仓库仓
-mkdir -p arch_work
-cd arch_work
-git clone "$REPO_URL" repo_dest
+# 2. 预准备：先把两个架构的 .zst 包都打出来，存在内存/临时目录里
+echo "🛠️ 正在本地构建全架构安装包..."
+mkdir -p /tmp/pkg_bak
 
 for ARCH in "x86_64" "aarch64"; do
-    echo "📦 Packaging for $ARCH..."
-    
-    # 寻找二进制压缩包
     if [ "$ARCH" == "x86_64" ]; then
         ART_DIR="$BINARY_DIR/bin-$BRANCH-linux-amd64v3"
         [ ! -d "$ART_DIR" ] && ART_DIR="$BINARY_DIR/bin-$BRANCH-linux-amd64"
@@ -37,65 +33,74 @@ for ARCH in "x86_64" "aarch64"; do
     fi
 
     TAR_PATH=$(find "$ART_DIR" -name "*.tar.gz" | head -n 1)
-    [ ! -f "$TAR_PATH" ] && { echo "⚠️ Skip $ARCH"; continue; }
-
-    # 准备构建目录
-    BUILD_DIR="build_$ARCH"; mkdir -p "$BUILD_DIR"
-    cp ../scripts/arch/PKGBUILD "$BUILD_DIR/PKGBUILD"
-    
-    # 核心：解压二进制到构建目录，改名为 sing-box-bin
-    tar -xzf "$TAR_PATH" -O sing-box > "$BUILD_DIR/sing-box-bin"
-    
-    # 注入变量到 PKGBUILD
-    sed -i "s/_PKGNAME_/$PKGNAME/g" "$BUILD_DIR/PKGBUILD"
-    sed -i "s/_PKGVER_/$CLEAN_VER/g" "$BUILD_DIR/PKGBUILD"
-    sed -i "s/_RAWVER_/$RAW_VER/g" "$BUILD_DIR/PKGBUILD"
-    sed -i "s/_ARCH_OPTS_/$ARCH/g" "$BUILD_DIR/PKGBUILD"
-
-    # 打包
-    chmod -R 777 "$BUILD_DIR"
-    cd "$BUILD_DIR"
-    sudo -u nobody CARCH=$ARCH makepkg -f --nodeps
-    
-    # 入库
-    cd ..
-    mkdir -p "repo_dest/$ARCH"
-    cp "$BUILD_DIR"/*.pkg.tar.zst "repo_dest/$ARCH/"
-    cd "repo_dest/$ARCH"
-    repo-add "$REPO_NAME.db.tar.zst" *.pkg.tar.zst
-    rm -f *.old *.old.sig
-    cd ../..
+    if [ -f "$TAR_PATH" ]; then
+        BUILD_DIR="build_$ARCH"; mkdir -p "$BUILD_DIR"
+        cp scripts/arch/PKGBUILD "$BUILD_DIR/PKGBUILD"
+        tar -xzf "$TAR_PATH" -O sing-box > "$BUILD_DIR/sing-box-bin"
+        
+        sed -i "s/_PKGNAME_/$PKGNAME/g" "$BUILD_DIR/PKGBUILD"
+        sed -i "s/_PKGVER_/$CLEAN_VER/g" "$BUILD_DIR/PKGBUILD"
+        sed -i "s/_RAWVER_/$RAW_VER/g" "$BUILD_DIR/PKGBUILD"
+        sed -i "s/_ARCH_OPTS_/$ARCH/g" "$BUILD_DIR/PKGBUILD"
+        
+        chmod -R 777 "$BUILD_DIR"
+        (cd "$BUILD_DIR" && sudo -u nobody CARCH=$ARCH makepkg -f --nodeps)
+        
+        # 存入备份目录
+        cp "$BUILD_DIR"/*.pkg.tar.zst /tmp/pkg_bak/
+    fi
 done
 
-# 5. 提交回库 (二进制逻辑优化)
-cd repo_dest
-git config user.name "CI-Bot"
-git config user.email "ci@cagedbird.top"
-git add .
+# 3. 核心：带重试逻辑的入库推送
+MAX_RETRIES=5
+RETRY_COUNT=0
 
-if git diff --quiet && git diff --staged --quiet; then
-    echo "No changes to commit"
-else
-    # 强制标记：如果二进制文件冲突，以“最新拉取的”为准
-    # 然后我们重新运行 repo-add 覆盖它
-    git commit -m "Update $PKGNAME to $VERSION"
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    echo "🔄 尝试入库推送 (第 $((RETRY_COUNT+1)) 次)..."
     
-    MAX_RETRIES=3
-    RETRY_COUNT=0
-    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-        if git push origin main; then
-            echo "✅ 入库成功"
-            break
-        else
-            echo "⚠️ 并发冲突，执行强制同步重试..."
-            # 放弃本地的二进制索引，强制拉取远端最新的
-            git fetch origin main
-            git reset --hard origin/main
-            
-            # 🎖️ 重新执行入库逻辑 (因为刚才 reset 把它冲掉了，我们要重做)
-            # 这部分逻辑需要包装成函数或者重新跑一遍 package
-            # 但如果你开了 max-parallel: 1，这里其实根本不会被触发！
-            exit 1 # 开了 max-parallel 之后，这里直接 exit 即可，不应该发生
+    # 每次重试都重新 clone，确保基础环境绝对纯净
+    rm -rf repo_dest
+    git clone "$REPO_URL" repo_dest
+    
+    # 将刚才备份的包拷进去
+    for ARCH in "x86_64" "aarch64"; do
+        mkdir -p "repo_dest/$ARCH"
+        # 只拷贝符合当前架构的包
+        cp /tmp/pkg_bak/*-${ARCH}.pkg.tar.zst "repo_dest/$ARCH/" 2>/dev/null || true
+    done
+    
+    # 更新索引并清理备份文件
+    cd repo_dest
+    for ARCH in "x86_64" "aarch64"; do
+        if [ -d "$ARCH" ]; then
+            cd "$ARCH"
+            repo-add "$REPO_NAME.db.tar.zst" *.pkg.tar.zst
+            rm -f *.old # 强迫症：清理旧索引
+            cd ..
         fi
     done
-fi
+    
+    # 尝试提交
+    git config user.name "CI-Bot"
+    git config user.email "ci@cagedbird.top"
+    git add .
+    if git diff --quiet && git diff --staged --quiet; then
+        echo "✅ 仓库内容无变动，无需推送。"
+        exit 0
+    fi
+    
+    git commit -m "Update $PKGNAME to $VERSION"
+    
+    if git push origin main; then
+        echo "✨ 任务达成！入库成功。"
+        exit 0
+    else
+        echo "⚠️ 推送冲突（有人抢坑），等待 5 秒后重试..."
+        RETRY_COUNT=$((RETRY_COUNT+1))
+        cd ..
+        sleep 5
+    fi
+done
+
+echo "❌ 失败：多次重试后仍无法解决并发冲突。"
+exit 1
