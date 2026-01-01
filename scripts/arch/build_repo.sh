@@ -8,7 +8,7 @@ BINARY_DIR=$3  # Artifacts 存放路径 (例如 $(pwd)/artifacts)
 REPO_TOKEN=$4  # 你的 Fine-grained PAT
 
 REPO_NAME="cagedbird-repo"
-REPO_URL="https://x-access-token:${REPO_TOKEN}@github.com/cagedbird043/cagedbird-pacman-repo.git"
+REPO_URL="https://x-access-token:${REPO_TOKEN}@github.com/Mice-Tailor-Infra/cagedbird-pacman-repo.git"
 
 # 处理版本号
 RAW_VER="${VERSION#v}"
