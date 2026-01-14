@@ -14,13 +14,26 @@ jobs:
     outputs:
       main_tag: ${{ steps.tags.outputs.main_tag }}
       dev_tag: ${{ steps.tags.outputs.dev_tag }}
+      main_time: ${{ steps.tags.outputs.main_time }}
+      dev_time: ${{ steps.tags.outputs.dev_time }}
     steps:
       - id: tags
         run: |
           MAIN=$(git ls-remote --tags https://github.com/SagerNet/sing-box.git | grep -Po 'refs/tags/\Kv[0-9.]+$' | sort -V | tail -n1)
           DEV=$(git ls-remote --tags https://github.com/SagerNet/sing-box.git | grep -Po 'refs/tags/\Kv[0-9].*$' | sort -V | tail -n1)
+          
+          # 获取 reF1nd-main 分支最新提交时间
+          git clone --depth 1 --branch reF1nd-main https://github.com/reF1nd/sing-box.git /tmp/singbox-main
+          MAIN_TIME=$(cd /tmp/singbox-main && git log -1 --format='%ci' | cut -d' ' -f1,2)
+          
+          # 获取 reF1nd-dev 分支最新提交时间
+          git clone --depth 1 --branch reF1nd-dev https://github.com/reF1nd/sing-box.git /tmp/singbox-dev
+          DEV_TIME=$(cd /tmp/singbox-dev && git log -1 --format='%ci' | cut -d' ' -f1,2)
+          
           echo "main_tag=$MAIN" >> $GITHUB_OUTPUT
           echo "dev_tag=$DEV" >> $GITHUB_OUTPUT
+          echo "main_time=$MAIN_TIME" >> $GITHUB_OUTPUT
+          echo "dev_time=$DEV_TIME" >> $GITHUB_OUTPUT
 
   build:
     needs: check
@@ -126,11 +139,10 @@ jobs:
         run: |
           if [ "${{ matrix.branch }}" == "reF1nd-main" ]; then
             echo "REL_TAG=${{ needs.check.outputs.main_tag }}" >> $GITHUB_ENV
-            echo "UPSTREAM_TIME=${{ needs.check.outputs.latest_time }}" >> $GITHUB_ENV
+            echo "UPSTREAM_TIME=${{ needs.check.outputs.main_time }}" >> $GITHUB_ENV
           else
             echo "REL_TAG=${{ needs.check.outputs.dev_tag }}-dev" >> $GITHUB_ENV
-            # Dev 分支可能没有特定的时间，也可以用 check 任务传过来的
-            echo "UPSTREAM_TIME=${{ needs.check.outputs.latest_time }}" >> $GITHUB_ENV
+            echo "UPSTREAM_TIME=${{ needs.check.outputs.dev_time }}" >> $GITHUB_ENV
           fi
 
       - name: Create Release
@@ -138,6 +150,7 @@ jobs:
         with:
           tag_name: ${{ env.REL_TAG }}
           name: sing-box reF1nd [${{ matrix.branch }}]
+          make_latest: ${{ matrix.branch == 'reF1nd-main' }}
           # 在 Body 注入构建时间
           body: |
             ### 🛠️ 构建信息 (Build Info)
@@ -184,3 +197,23 @@ jobs:
           fi
           # 执行刚才那个脚本
           bash scripts/arch/build_repo.sh "${{ matrix.branch }}" "$TAG" "$(pwd)/artifacts" "${REPO_TOKEN}"
+
+  cleanup:
+    needs: [publish]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete Old Releases
+        run: |
+          # 获取所有 releases（按时间倒序）
+          ALL_RELEASES=$(gh release list --repo ${{ github.repository }} --limit 100 --json tagName --jq '.[].tagName')
+          
+          # 只保留最新的 2 个（v1.x.x 和 v1.x.x-dev）
+          # 删除其他所有旧版本
+          echo "$ALL_RELEASES" | tail -n +3 | while read tag; do
+            if [ -n "$tag" ]; then
+              echo "Deleting old release: $tag"
+              gh release delete "$tag" --repo ${{ github.repository }} --yes || true
+            fi
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
