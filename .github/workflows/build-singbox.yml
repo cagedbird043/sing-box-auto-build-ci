@@ -182,13 +182,14 @@ jobs:
 
       - name: Init Environment
         run: |
-          pacman -Syu --noconfirm git wget sudo
+          pacman -Syu --noconfirm git wget sudo github-cli
           # 允许 nobody 用户使用 sudo (makepkg 需要)
           echo "nobody ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
       - name: Build Arch Repo
         env:
           REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.REPO_TOKEN }}
         run: |
           if [ "${{ matrix.branch }}" == "reF1nd-main" ]; then
             TAG=${{ needs.check.outputs.main_tag }}
