@@ -7,7 +7,6 @@ VERSION=$2     # v1.12.14
 BINARY_DIR=$3  # Artifacts 存放路径 (例如 $(pwd)/artifacts)
 # REPO_TOKEN 不再直接用于 git 认证，gh CLI 会使用环境变量中的 GH_TOKEN
 
-REPO_NAME="cagedbird-repo"
 TARGET_REPO_OWNER="Mice-Tailor-Infra"
 TARGET_REPO_NAME="cagedbird-pacman-repo"
 TARGET_REPO="$TARGET_REPO_OWNER/$TARGET_REPO_NAME"
@@ -18,10 +17,12 @@ if [ "$BRANCH" == "reF1nd-main" ]; then
     PKGNAME="sing-box-ref1nd"
     CLEAN_VER="$RAW_VER"
     REL_SUFFIX=""
+    REPO_NAME="cagedbird-repo"
 else
     PKGNAME="sing-box-ref1nd-dev"
     CLEAN_VER="${RAW_VER//-/_}"
     REL_SUFFIX="-dev"
+    REPO_NAME="cagedbird-repo-dev"
 fi
 
 # 2. 预准备：构建全架构安装包
